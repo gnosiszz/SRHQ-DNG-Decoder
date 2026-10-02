@@ -81,6 +81,15 @@ tests/            GUI 端到端自动化测试（拦截文件对话框驱动真�
 docs/             示例图与管线截图
 ```
 
+## 来源与致谢
+
+超分管线来自 B 站 UP 主 **y-g-jiang**（Jiangtherapee / Transformer-JSR 作者）：
+
+- 📺 软件介绍视频：[https://www.bilibili.com/video/BV1pgam69EKv/](https://www.bilibili.com/video/BV1pgam69EKv/?spm_id_from=333.1387.list.card_archive.click&vd_source=3ecb5c5b08c44781d055358a951c51a5)
+- 🔗 作者 GitHub：[https://github.com/y-g-jiang](https://github.com/y-g-jiang)
+
+本仓库只是为该管线输出的 DNG 做了解码渲染工具，超分算法版权归原作者所有。
+
 ## License
 
 MIT
