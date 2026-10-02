@@ -14,7 +14,7 @@
 图像数据被切成 74 条 **16-bit 无损 JPEG 条带**（SOF3 + Adobe APP14）。主流软件对这种
 "LinearRaw + 无损 JPEG 条带"组合的支持是坏的：
 
-- Windows 照片 / Lightroom：打不开
+- Windows 照片：打不开
 - LibRaw（rawpy）：只解出第一条条带，其余全黑
 - Pillow：不识别 SOF3
 
