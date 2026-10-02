@@ -1,0 +1,9 @@
+# 自包含依赖不入库
+libs/
+libs314/
+__pycache__/
+*.pyc
+
+# 本地测试产物
+*.decoded.jpg
+*.decoded_quarter.jpg
