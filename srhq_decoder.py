@@ -23,6 +23,7 @@ import threading
 
 import numpy as np
 import imagecodecs
+import tifffile
 from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = None
@@ -156,8 +157,9 @@ def find_raw_ifd(t):
     return pool[0]
 
 
-def decode_dng(path, progress=None):
-    """解码 → 返回 (RGB uint8 数组, 信息 dict)"""
+def decode_dng(path, progress=None, want16=False):
+    """解码 → 返回 (RGB uint8 数组, 信息 dict, RGB uint16 或 None)。
+    want16=True 时额外生成 16bit sRGB 数据，供 16 位 TIFF 输出。"""
 
     def pct(a, b, msg=""):
         if progress:
@@ -236,6 +238,7 @@ def decode_dng(path, progress=None):
     info["exposure_scale"] = 0.92 / hi
 
     out8 = np.empty((H, W, 3), dtype=np.uint8)
+    out16 = np.empty((H, W, 3), dtype=np.uint16) if want16 else None
     step = max(1, H // 16)
     for y0 in range(0, H, step):
         y1 = min(y0 + step, H)
@@ -243,10 +246,14 @@ def decode_dng(path, progress=None):
         blk = (blk - bl) / (white - bl.max())
         blk = np.clip(blk * wbv * (0.92 / hi), 0.0, 1.0)
         srgb = np.where(blk <= 0.0031308, blk * 12.92, 1.055 * blk ** (1 / 2.4) - 0.055)
-        out8[y0:y1] = srgb * 255 + 0.5
+        if want16:
+            out16[y0:y1] = np.clip(srgb * 65535.0 + 0.5, 0, 65535).astype(np.uint16)
+            out8[y0:y1] = out16[y0:y1] >> 8        # 8bit 直接从 16bit 截取，保证两份输出一致
+        else:
+            out8[y0:y1] = srgb * 255 + 0.5
         pct(70 + 25 * y0 // H, 100, "渲染 %d/%d 行" % (y0, H))
     pct(97, 100, "完成")
-    return out8, info
+    return out8, info, out16
 
 
 _CACHE = {}
@@ -264,21 +271,35 @@ def d_bytes_region(path, off, cnt):
     return d[off:off + cnt]
 
 
-def save_outputs(rgb8, src_path, out_dir=None, progress=None):
+def save_outputs(rgb8, src_path, out_dir=None, progress=None, fmt="jpg", out16=None):
+    """fmt: "jpg" | "tiff" | "both"。tiff 需要 out16（16bit sRGB 数据）。"""
     base_dir = out_dir if out_dir else os.path.dirname(src_path)
     base = os.path.join(base_dir, os.path.splitext(os.path.basename(src_path))[0])
-    out_full = base + "_decoded.jpg"
-    if progress:
-        progress(98, 100, "写全分辨率 JPG…")
-    Image.fromarray(rgb8, "RGB").save(out_full, quality=92, subsampling=1)
-    h, w = rgb8.shape[:2]
-    out_q = base + "_decoded_quarter.jpg"
-    Image.fromarray(rgb8, "RGB").resize((w // 4, h // 4), Image.LANCZOS).save(out_q, quality=90)
-    return out_full, out_q
+    outputs = []
+    if fmt in ("jpg", "both"):
+        out_full = base + "_decoded.jpg"
+        if progress:
+            progress(98, 100, "写全分辨率 JPG…")
+        Image.fromarray(rgb8, "RGB").save(out_full, quality=92, subsampling=1)
+        outputs.append(out_full)
+        h, w = rgb8.shape[:2]
+        out_q = base + "_decoded_quarter.jpg"
+        Image.fromarray(rgb8, "RGB").resize((w // 4, h // 4), Image.LANCZOS).save(out_q, quality=90)
+        outputs.append(out_q)
+    if fmt in ("tiff", "both"):
+        if out16 is None:
+            raise DNGError("内部错误：请求 TIFF 输出但没有 16bit 数据")
+        out_tif = base + "_decoded_16bit.tif"
+        if progress:
+            progress(98, 100, "写 16 位 TIFF…")
+        tifffile.imwrite(out_tif, out16, photometric="rgb", compression="zlib",
+                         metadata={"Software": "SRHQ Decoder v1.2", "ColorSpace": "sRGB (16bit)"})
+        outputs.append(out_tif)
+    return outputs
 
 
 # ---------------- CLI ----------------
-def run_cli(paths):
+def run_cli(paths, fmt="jpg", out_dir=None):
     for p in paths:
         p = p.strip('" ')
         if not os.path.isfile(p):
@@ -288,15 +309,18 @@ def run_cli(paths):
         print("解码:", os.path.basename(p))
         t0 = time.time()
         try:
-            rgb8, info = decode_dng(p, progress=lambda a, b, m: print("\r  %s" % m, end="", flush=True))
+            want16 = fmt in ("tiff", "both")
+            rgb8, info, out16 = decode_dng(p, want16=want16,
+                                           progress=lambda a, b, m: print("\r  %s" % m, end="", flush=True))
             print()
-            full, quarter = save_outputs(rgb8, p, progress=lambda a, b, m: print("\r  %s" % m, end="", flush=True))
+            outputs = save_outputs(rgb8, p, out_dir=out_dir, fmt=fmt, out16=out16,
+                                   progress=lambda a, b, m: print("\r  %s" % m, end="", flush=True))
             print("\n  %s %s | %dx%d | 条带 %d (失败 %d) | WB %s | 耗时 %.1fs"
                   % (info["make"], info["model"], info["width"], info["height"],
                      info["strips"], info["failed_strips"],
                      ["%.2f" % x for x in info["wb"]], time.time() - t0))
-            print("  输出:", full)
-            print("       ", quarter)
+            for o in outputs:
+                print("  输出:", o)
         except DNGError as e:
             print("\n  [失败] %s" % e)
         except Exception as e:
@@ -310,7 +334,7 @@ def run_gui():
     import queue
 
     root = tk.Tk()
-    root.title("SRHQ 超分 DNG 解码器 v1.1（Sony A7C2 专用）")
+    root.title("SRHQ 超分 DNG 解码器 v1.2（Sony A7C2 专用）")
     root.geometry("640x400")
     root.configure(bg="#1e1e1e")
 
@@ -351,6 +375,18 @@ def run_gui():
               fg=fg, relief="flat", padx=10, command=pick_outdir,
               cursor="hand2").pack(side="left")
 
+    # 输出格式选择
+    fmtframe = tk.Frame(root, bg="#1e1e1e")
+    fmtframe.pack(fill="x", padx=20, before=log)
+    FMT_MAP = {"JPG（8bit，体积小）": "jpg",
+               "16位 TIFF（无损，后期余量大）": "tiff",
+               "JPG + 16位 TIFF（两者都要）": "both"}
+    tk.Label(fmtframe, text="输出格式:", font=("Microsoft YaHei", 10),
+             bg="#1e1e1e", fg=fg).pack(side="left")
+    fmt_var = tk.StringVar(value="JPG（8bit，体积小）")
+    ttk.Combobox(fmtframe, textvariable=fmt_var, state="readonly",
+                 values=list(FMT_MAP), width=30).pack(side="left", padx=8)
+
     btn_decode = tk.Button(root, text="选择 DNG 文件并解码", font=("Microsoft YaHei", 12),
                            bg="#2d6cdf", fg="white", relief="flat", padx=24, pady=8,
                            cursor="hand2")
@@ -362,22 +398,22 @@ def run_gui():
         log.see("end")
         log.configure(state="disabled")
 
-    def worker(path, out_dir_val):
+    def worker(path, out_dir_val, fmt):
         """后台线程：只做解码，UI 更新全部走 ui_queue（不碰任何 Tk 对象）"""
         def prog(a, b, m):
             ui_queue.put(("progress", a / b * 100, m))
         try:
             t0 = time.time()
-            rgb8, info = decode_dng(path, progress=prog)
+            rgb8, info, out16 = decode_dng(path, want16=fmt in ("tiff", "both"), progress=prog)
             if out_dir_val in ("", "（与源文件相同）") or not os.path.isdir(out_dir_val):
                 out_dir_val = None
-            full, quarter = save_outputs(rgb8, path, out_dir=out_dir_val)
+            outputs = save_outputs(rgb8, path, out_dir=out_dir_val, fmt=fmt, out16=out16)
             ui_queue.put(("log", "OK  %s %s  %dx%d  条带 %d(失败 %d)  耗时 %.1fs"
                           % (info["make"], info["model"], info["width"], info["height"],
                              info["strips"], info["failed_strips"], time.time() - t0)))
-            ui_queue.put(("log", "    " + full))
-            ui_queue.put(("log", "    " + quarter))
-            ui_queue.put(("progress", 100, "完成 → " + os.path.basename(full)))
+            for o in outputs:
+                ui_queue.put(("log", "    " + o))
+            ui_queue.put(("progress", 100, "完成 → %d 个输出文件" % len(outputs)))
             ui_queue.put(("done", None))
         except Exception as e:
             print("[worker] FAIL: %s: %s" % (type(e).__name__, e), file=sys.stderr, flush=True)
@@ -410,7 +446,8 @@ def run_gui():
         running["flag"] = True
         btn_decode.configure(state="disabled", bg="#555555")
         out_dir_val = outdir_var.get().strip()   # 主线程取值，传给后台线程
-        threading.Thread(target=worker, args=(paths[0], out_dir_val), daemon=True).start()
+        fmt = FMT_MAP[fmt_var.get()]             # 主线程取值，传给后台线程
+        threading.Thread(target=worker, args=(paths[0], out_dir_val, fmt), daemon=True).start()
 
     def pick():
         ps = filedialog.askopenfilenames(filetypes=[("DNG 图像", "*.dng"), ("所有文件", "*.*")])
@@ -436,8 +473,14 @@ def run_gui():
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if a.strip()]
-    if args:
-        run_cli(args)
+    import argparse
+    ap = argparse.ArgumentParser(description="SRHQ 超分 DNG 解码器（Sony A7C2 专用）")
+    ap.add_argument("dngs", nargs="*", help="DNG 文件路径（可多个；不传则启动图形界面）")
+    ap.add_argument("-f", "--format", choices=["jpg", "tiff", "both"], default="jpg",
+                    help="输出格式：jpg=8bit JPG / tiff=16位 TIFF / both=两者都要（默认 jpg）")
+    ap.add_argument("-o", "--outdir", default=None, help="输出文件夹（默认与源文件相同）")
+    a = ap.parse_args()
+    if a.dngs:
+        run_cli(a.dngs, fmt=a.format, out_dir=a.outdir)
     else:
         run_gui()

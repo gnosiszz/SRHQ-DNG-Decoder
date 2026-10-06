@@ -33,13 +33,27 @@
 
 ## 用法
 
-- **拖放**：把 `.dng` 拖到 `解码.bat` 上 → 命令行直解
-- **双击** `解码.bat` → 图形界面（可选批量文件、进度条、自选输出文件夹）
-- **命令行**：`python srhq_decoder.py <文件.dng> [更多.dng ...]`
+- **拖放**：把 `.dng` 拖到 `解码.bat` 上 → 命令行直解（默认 JPG）
+- **双击** `解码.bat` → 图形界面（批量文件、进度条、自选输出文件夹、选择输出格式）
+- **命令行**：
+
+```bash
+python srhq_decoder.py <文件.dng>                          # 默认输出 JPG
+python srhq_decoder.py <文件.dng> --format tiff            # 只输出 16 位 TIFF
+python srhq_decoder.py <文件.dng> --format both -o D:\out  # JPG + 16位TIFF，指定输出目录
+```
+
+## 输出格式对比
+
+| 格式 | 位深 | 体积（131MP 实测） | 适用场景 |
+|---|---|---|---|
+| JPG | 8bit | ~30MB | 查看、分享 |
+| 16 位 TIFF | 16bit sRGB | ~576MB（zlib 压缩） | 后期调色余量大、通用性最好的无损交换格式（PS/GIMP/OpenCV 通吃） |
 
 输出（默认与源文件同目录，GUI 可自选输出文件夹）：
-- `<原名>_decoded.jpg` — 全分辨率（quality 92）
-- `<原名>_decoded_quarter.jpg` — 1/4 缩放预览
+- `<原名>_decoded.jpg` — 全分辨率 JPG（quality 92）
+- `<原名>_decoded_16bit.tif` — 全分辨率 16 位 TIFF（zlib 压缩，sRGB 编码）
+- `<原名>_decoded_quarter.jpg` — 1/4 缩放预览（随 JPG 输出）
 
 单条带损坏会跳过并计数，不会整张报废；不支持的布局会明确报错。
 
@@ -48,7 +62,7 @@
 需要 Python 3.13+：
 
 ```bash
-pip install numpy pillow imagecodecs
+pip install numpy pillow imagecodecs tifffile
 ```
 
 Windows 下仓库自带的 `解码.bat` 会自动设置路径，无需手动安装。
@@ -63,7 +77,7 @@ TIFF 解析（IFD0/SubIFD）
   → 黑位扣除（BlackLevel）
   → 白平衡（AsShotNeutral 增益）
   → 曝光锚点（99.5% 分位 → 0.92）
-  → sRGB Gamma → 8bit JPG
+  → sRGB Gamma → 8bit JPG / 16bit TIFF（可选）
 ```
 
 ## 限制
