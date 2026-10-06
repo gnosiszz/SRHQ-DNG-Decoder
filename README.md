@@ -62,7 +62,7 @@ python srhq_decoder.py <文件.dng> --format both -o D:\out  # JPG + 16位TIFF�
 需要 Python 3.13+：
 
 ```bash
-pip install numpy pillow imagecodecs tifffile
+pip install numpy pillow imagecodecs tifffile tifffile
 ```
 
 Windows 下仓库自带的 `解码.bat` 会自动设置路径，无需手动安装。
@@ -77,7 +77,7 @@ TIFF 解析（IFD0/SubIFD）
   → 黑位扣除（BlackLevel）
   → 白平衡（AsShotNeutral 增益）
   → 曝光锚点（99.5% 分位 → 0.92）
-  → sRGB Gamma → 8bit JPG / 16bit TIFF（可选）
+  → sRGB Gamma → 8bit JPG / 16bit TIFF（可选） / 16bit TIFF（可选）
 ```
 
 ## 限制
